@@ -12,13 +12,11 @@ require "logstash/namespace"
 # what the pricing schedule looks like and how to setup a queue.
 #
 # To use this plugin, you *must*:
-#
 #  * Have an AWS account
 #  * Setup an SQS queue
 #  * Create an identify that has access to publish messages to the queue.
 #
 # The "consumer" identity must have the following permissions on the queue:
-#
 #  * sqs:ChangeMessageVisibility
 #  * sqs:ChangeMessageVisibilityBatch
 #  * sqs:GetQueueAttributes
@@ -67,13 +65,20 @@ class LogStash::Outputs::SQS < LogStash::Outputs::Base
   # AWS secret key. Must have the appropriate permissions.
   config :secret_key, :validate => :string, :required => true
 
+  #
+  config :endpoint, :validate => :string, :required => true,
+          :default => 'sqs.eu-west-1.amazonaws.com'
+
   public 
   def register
     require "aws-sdk"
+    # Connect to SQS
     @sqs = AWS::SQS.new(
       :access_key_id => @access_key,
-      :secret_access_key => @secret_key
+      :secret_access_key => @secret_key,
+      :sqs_endpoint => @endpoint
     )
+
     begin
       @logger.debug("Connecting to AWS SQS queue '#{@queue}'...")
       @sqs_queue = @sqs.queues.named(@queue)
@@ -86,7 +91,12 @@ class LogStash::Outputs::SQS < LogStash::Outputs::Base
 
   public
   def receive(event)
-    @sqs_queue.send_message(event.to_json)
+    begin
+      @sqs_queue.send_message(event.to_json)
+    rescue Exception => e
+      @sqs_queue = @sqs.queues.named(@queue)
+      @logger.error("Unable to access SQS queue '#{@queue}': #{e.to_s}")
+    end      
   end # def receive
 
   public

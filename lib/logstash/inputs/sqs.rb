@@ -66,6 +66,10 @@ class LogStash::Inputs::SQS < LogStash::Inputs::Threadable
   # AWS secret key. Must have the appropriate permissions.
   config :secret_key, :validate => :string, :required => true
 
+  #
+  config :endpoint, :validate => :string, :required => true,
+          :default => 'sqs.eu-west-1.amazonaws.com'
+
   def initialize(params)
     super
     @format ||= "json_event"
@@ -76,14 +80,15 @@ class LogStash::Inputs::SQS < LogStash::Inputs::Threadable
     @logger.info("Registering SQS input", :queue => @queue)
     require "aws-sdk"
 
-    # Connec to SQS
+    # Connect to SQS
     @sqs = AWS::SQS.new(
       :access_key_id => @access_key,
-      :secret_access_key => @secret_key
+      :secret_access_key => @secret_key,
+      :sqs_endpoint => @endpoint
     )
 
     begin
-      @logger.debug("Connecting to AWS SQS queue", :queue => @queue)
+      @logger.info("Connecting to AWS SQS queue", :queue => @queue)
       @sqs_queue = @sqs.queues.named(@queue)
       @logger.info("Connected to AWS SQS queue successfully.", :queue => @queue)
     rescue Exception => e
@@ -94,7 +99,7 @@ class LogStash::Inputs::SQS < LogStash::Inputs::Threadable
 
   public
   def run(output_queue)
-    @logger.debug("Polling SQS queue", :queue => @queue)
+    @logger.info("Polling SQS queue", :queue => @queue)
     
     receive_opts = {
       :limit => 10,
@@ -139,15 +144,17 @@ class LogStash::Inputs::SQS < LogStash::Inputs::Threadable
     begin
       block.call
     rescue AWS::EC2::Errors::RequestLimitExceeded
-      @logger.info("AWS::EC2::Errors::RequestLimitExceeded ... retrying SQS request", :queue => @queue, :sleep_time => sleep_time)
+      @logger.error("AWS::EC2::Errors::RequestLimitExceeded ... retrying SQS request", :queue => @queue, :sleep_time => sleep_time)
       sleep sleep_time
       run_with_backoff(max_time, sleep_time * 2, &block)
     rescue AWS::EC2::Errors::InstanceLimitExceeded
-      @logger.warn("AWS::EC2::Errors::InstanceLimitExceeded ... aborting SQS message retreival.")
+      @logger.error("AWS::EC2::Errors::InstanceLimitExceeded ... aborting SQS message retreival.")
       return false
     rescue Exception => bang
       @logger.error("Error reading SQS queue.", :error => bang, :queue => @queue)
-      return false
+ 
+      @sqs_queue = @sqs.queues.named(@queue)
+      run_with_backoff(max_time, sleep_time * 2, &block)
     end # begin/rescue
     return true
   end # def run_with_backoff
